@@ -14,21 +14,20 @@ using System.Linq;
 namespace CraftingEngine
 {
     /*======================================================================
-     * 1️⃣ ITEM – the building block for everything that can be stored,
-     *    crafted, bought or sold.
+     * 1️⃣ ITEM – fundamental building block.
      *=====================================================================*/
     public enum ItemCategory { Material, Consumable, Weapon, Tool, Quest, Misc }
     public enum Rarity { Common, Uncommon, Rare, Epic, Legendary }
 
     public sealed class Item : IEquatable<Item>
     {
-        public Guid Id { get; init; } = Guid.NewGuid();   // unique identifier
-        public string Name { get; init; }                // e.g. "Milk"
-        public string Description { get; init; } = "";   // tooltip text (optional)
-        public string Unit { get; init; }                // e.g. "cups", "ounces"
-        public decimal BasePrice { get; private set; }   // price for 1 unit
-        public bool Stackable { get; init; } = true;     // can multiple units share a slot?
-        public int MaxStackSize { get; init; } = 99;     // max per stack (if stackable)
+        public Guid Id { get; init; } = Guid.NewGuid();   // immutable identifier
+        public string Name { get; init; }
+        public string Description { get; init; } = "";
+        public string Unit { get; init; }
+        public decimal BasePrice { get; private set; }
+        public bool Stackable { get; init; } = true;
+        public int MaxStackSize { get; init; } = 99;
         public ItemCategory Category { get; init; } = ItemCategory.Material;
         public Rarity Rarity { get; init; } = Rarity.Common;
 
@@ -51,27 +50,23 @@ namespace CraftingEngine
             Description = description;
         }
 
-        public string GetDisplayName() => Name;
-        public string GetFullDescription() => $"{Name} ({Unit}) – {Description}";
+        // --------------------------------------------------------------
+        // Required implementation of IEquatable<Item>
+        // --------------------------------------------------------------
+        public bool Equals(Item? other)
+        {
+            if (other is null) return false;
+            return Id == other.Id;
+        }
 
-        public decimal CalculateSellPrice(decimal vendorBuyModifier) =>
-            Math.Round(BasePrice * vendorBuyModifier, 2);
-
-        public decimal CalculateBuyPrice(decimal vendorSellModifier) =>
-            Math.Round(BasePrice * vendorSellModifier, 2);
-
-        public bool CanStackWith(Item other) =>
-            other != null && Stackable && other.Stackable && Id == other.Id;
-
-        public Item Clone() => (Item)MemberwiseClone();
-
-        public bool Equals(Item? other) => other != null && Id == other.Id;
+        // --------------------------------------------------------------
+        // Standard overrides – keep them as‑is.
+        // --------------------------------------------------------------
         public override bool Equals(object? obj) => Equals(obj as Item);
         public override int GetHashCode() => Id.GetHashCode();
-
         public override string ToString() => $"{Name} ({Unit})";
 
-        // Optional helper for sales events
+        // Optional helper for discount scenarios
         public void ApplyDiscount(decimal percent)
         {
             if (percent < 0m || percent > 100m)
@@ -81,7 +76,7 @@ namespace CraftingEngine
     }
 
     /*======================================================================
-     * 2️⃣ QUANTITY – couples an Item with an amount.
+     * 2️⃣ QUANTITY – immutable pairing of Item and amount.
      *=====================================================================*/
     public sealed class Quantity : IEquatable<Quantity>
     {
@@ -98,30 +93,36 @@ namespace CraftingEngine
         public override string ToString()
             => $"{Amount.ToString(CultureInfo.InvariantCulture)} {Item.Unit} {Item.Name}";
 
-        public bool Equals(Quantity? other)
-        {
-            if (other is null) return false;
-            return Item.Id == other.Item.Id && Amount == other.Amount;
-        }
+        public bool Equals(Quantity? other) =>
+            other != null && Item.Id == other.Item.Id && Amount == other.Amount;
+
         public override bool Equals(object? obj) => Equals(obj as Quantity);
         public override int GetHashCode() => HashCode.Combine(Item.Id, Amount);
     }
 
     /*======================================================================
-     * 3️⃣ INGREDIENT & RESULT – semantic wrappers around Quantity.
+     * 3️⃣ INGREDIENT & RESULT – thin wrappers around Quantity.
      *=====================================================================*/
-    public sealed class Ingredient : Quantity
+    public sealed class Ingredient
     {
-        public Ingredient(Item item, decimal amount) : base(item, amount) { }
+        public Quantity Value { get; }
+        public Ingredient(Item item, decimal amount) => Value = new Quantity(item, amount);
+        public Item Item => Value.Item;
+        public decimal Amount => Value.Amount;
+        public override string ToString() => Value.ToString();
     }
 
-    public sealed class Result : Quantity
+    public sealed class Result
     {
-        public Result(Item item, decimal amount) : base(item, amount) { }
+        public Quantity Value { get; }
+        public Result(Item item, decimal amount) => Value = new Quantity(item, amount);
+        public Item Item => Value.Item;
+        public decimal Amount => Value.Amount;
+        public override string ToString() => Value.ToString();
     }
 
     /*======================================================================
-     * 4️⃣ RECIPE – defines how to turn ingredients into a result.
+     * 4️⃣ RECIPE – defines how ingredients become a result.
      *=====================================================================*/
     public sealed class Recipe
     {
@@ -138,6 +139,7 @@ namespace CraftingEngine
         {
             if (string.IsNullOrWhiteSpace(name))
                 throw new ArgumentException("Name required", nameof(name));
+
             Name        = name;
             Result      = result ?? throw new ArgumentNullException(nameof(result));
             Ingredients = ingredients?.ToList().AsReadOnly()
@@ -145,51 +147,19 @@ namespace CraftingEngine
             IsStarter   = isStarter;
         }
 
-        /// <summary>
-        /// Checks whether the supplied inventory holds enough of every ingredient.
-        /// </summary>
-        public bool CanCraft(Inventory inventory)
-        {
-            foreach (var ing in Ingredients)
-                if (!inventory.Has(ing.Item.Id, ing.Amount))
-                    return false;
-            return true;
-        }
+        public bool CanCraft(Inventory inv) =>
+            Ingredients.All(i => inv.Has(i.Item.Id.ToString(), i.Amount));
 
-        /// <summary>
-        /// Executes the craft: consumes ingredients and adds the result.
-        /// Returns true on success, false if inventory lacked ingredients.
-        /// </summary>
-        public bool Craft(Inventory inventory)
+        public bool Craft(Inventory inv)
         {
-            if (!CanCraft(inventory)) return false;
+            if (!CanCraft(inv)) return false;
 
             foreach (var ing in Ingredients)
-                inventory.Remove(ing.Item.Id, ing.Amount);
+                inv.Remove(ing.Item.Id.ToString(), ing.Amount);
 
-            inventory.Add(Result.Item.Id, Result.Amount);
+            inv.Add(Result.Item.Id.ToString(), Result.Amount);
             return true;
         }
-
-        public bool Validate(out string error)
-        {
-            if (string.IsNullOrWhiteSpace(Name))
-                return Fail(out error, "Recipe name missing.");
-            if (Result == null)
-                return Fail(out error, "Result not defined.");
-            if (!Ingredients.Any())
-                return Fail(out error, "At least one ingredient required.");
-
-            foreach (var ing in Ingredients)
-                if (ing.Amount <= 0)
-                    return Fail(out error,
-                                $"Ingredient {ing.Item.Name} has non‑positive amount.");
-
-            error = string.Empty;
-            return true;
-        }
-
-        private static bool Fail(out string err, string msg) { err = msg; return false; }
 
         public override string ToString()
         {
@@ -199,7 +169,7 @@ namespace CraftingEngine
     }
 
     /*======================================================================
-     * 5️⃣ INVENTORY – simple container mapping ItemId → amount.
+     * 5️⃣ INVENTORY – simple string‑keyed map of IDs to amounts.
      *=====================================================================*/
     public sealed class Inventory
     {
@@ -238,121 +208,119 @@ namespace CraftingEngine
     }
 
     /*======================================================================
-     * 6️⃣ RECIPE CATALOG – creates the three original starter recipes
-     *    plus the **new material “Sugar”** and a new recipe that uses it.
+     * 6️⃣ CENTRALIZED ITEM DEFINITIONS
+     *=====================================================================*/
+    public static class GameItems
+    {
+        // Core materials & consumables
+        public static readonly Item Milk          = new Item("Milk",          "cups",   0.50m);
+        public static readonly Item ChocolateChip = new Item("Chocolate Chips","cup",    1.20m);
+        public static readonly Item HotChocolate  = new Item("Hot Chocolate", "ounces", 2.00m);
+        public static readonly Item Flour         = new Item("Flour",         "cups",   0.30m);
+        public static readonly Item Water         = new Item("Water",         "cups",   0.00m);
+        public static readonly Item Yeast         = new Item("Yeast",         "cup",    0.80m);
+        public static readonly Item Bread         = new Item("Bread",         "loaf",   1.50m);
+        public static readonly Item Herb          = new Item("Herb",          "pieces", 0.40m);
+        public static readonly Item HealingPotion = new Item("Healing Potion","bottle", 3.00m);
+        public static readonly Item Sugar         = new Item("Sugar",         "cups",   0.60m); // newly added material
+    }
+
+    /*======================================================================
+     * 7️⃣ RECIPE CATALOG – builds recipes using the shared items.
      *=====================================================================*/
     public static class RecipeCatalog
     {
         public static List<Recipe> LoadStarterRecipes()
         {
-            // -----------------------------------------------------------------
-            // Define reusable Items (materials & results)
-            // -----------------------------------------------------------------
-            var milk          = new Item("Milk",          "cups",   0.50m);
-            var chocolateChip = new Item("Chocolate Chips", "cup", 1.20m);
-            var hotChocolate  = new Item("Hot Chocolate", "ounces", 2.00m);
+            // Short aliases for readability
+            var m  = GameItems.Milk;
+            var cc = GameItems.ChocolateChip;
+            var hc = GameItems.HotChocolate;
+            var f  = GameItems.Flour;
+            var w  = GameItems.Water;
+            var y  = GameItems.Yeast;
+            var b  = GameItems.Bread;
+            var h  = GameItems.Herb;
+            var hp = GameItems.HealingPotion;
+            var s  = GameItems.Sugar;
 
-            var flour = new Item("Flour", "cups", 0.30m);
-            var water = new Item("Water", "cups", 0.00m);
-            var yeast = new Item("Yeast", "cup",  0.80m);
-            var bread = new Item("Bread", "loaf", 1.50m);
-
-            var herb          = new Item("Herb",          "pieces", 0.40m);
-            var healingPotion = new Item("Healing Potion", "bottle", 3.00m);
-
-            // *** NEW MATERIAL ***
-            var sugar = new Item("Sugar", "cups", 0.60m);   // <-- added material
-
-            // -----------------------------------------------------------------
-            // 1️⃣ Hot Chocolate
-            // -----------------------------------------------------------------
             var hotChocolateRecipe = new Recipe(
                 name: "Hot Chocolate",
-                result: new Result(hotChocolate, 12m),   // 12 ounces
+                result: new Result(hc, 12m),
                 ingredients: new[]
                 {
-                    new Ingredient(milk,          4m),   // 4 cups milk
-                    new Ingredient(chocolateChip, 0.5m)  // ½ cup chocolate chips
+                    new Ingredient(m, 4m),
+                    new Ingredient(cc, 0.5m)
                 },
                 isStarter: true);
 
-            // -----------------------------------------------------------------
-            // 2️⃣ Bread
-            // -----------------------------------------------------------------
             var breadRecipe = new Recipe(
                 name: "Bread",
-                result: new Result(bread, 1m),          // 1 loaf
+                result: new Result(b, 1m),
                 ingredients: new[]
                 {
-                    new Ingredient(flour, 3m),   // 3 cups flour
-                    new Ingredient(water, 1.5m), // 1.5 cups water
-                    new Ingredient(yeast, 0.02m) // 0.02 cup yeast
+                    new Ingredient(f, 3m),
+                    new Ingredient(w, 1.5m),
+                    new Ingredient(y, 0.02m)
                 },
                 isStarter: true);
 
-            // -----------------------------------------------------------------
-            // 3️⃣ Healing Potion
-            // -----------------------------------------------------------------
             var potionRecipe = new Recipe(
                 name: "Healing Potion",
-                result: new Result(healingPotion, 1m),   // 1 bottle
+                result: new Result(hp, 1m),
                 ingredients: new[]
                 {
-                    new Ingredient(herb, 2m),   // 2 pieces herb
-                    new Ingredient(water,0.5m)  // ½ cup water
+                    new Ingredient(h, 2m),
+                    new Ingredient(w, 0.5m)
                 },
                 isStarter: true);
 
-            // -----------------------------------------------------------------
-            // 4️⃣ Sweet Hot Chocolate (NEW RECIPE USING SUGAR)
-            // -----------------------------------------------------------------
             var sweetHotChocolateRecipe = new Recipe(
                 name: "Sweet Hot Chocolate",
-                result: new Result(hotChocolate, 12m),   // same result item, same amount
+                result: new Result(hc, 12m),
                 ingredients: new[]
                 {
-                    new Ingredient(milk,          4m),   // 4 cups milk
-                    new Ingredient(chocolateChip, 0.5m), // ½ cup chocolate chips
-                    new Ingredient(sugar,         0.25m) // ¼ cup sugar (new material)
+                    new Ingredient(m, 4m),
+                    new Ingredient(cc, 0.5m),
+                    new Ingredient(s, 0.25m) // uses the new Sugar material
                 },
-                isStarter: false); // not part of the initial three
+                isStarter: false);
 
-            // Return the full list (starter + the new one)
             return new List<Recipe>
             {
                 hotChocolateRecipe,
                 breadRecipe,
                 potionRecipe,
-                sweetHotChocolateRecipe   // <-- included
+                sweetHotChocolateRecipe
             };
         }
     }
 
     /*======================================================================
-     * 7️⃣ PROGRAM – entry point that demonstrates the crafting system.
+     * 8️⃣ PROGRAM – entry point.
      *=====================================================================*/
     internal static class Program
     {
         private static void Main()
         {
-            // Load all recipes (including the new Sweet Hot Chocolate)
+            // Load recipes (they reference the shared GameItems)
             var recipes = RecipeCatalog.LoadStarterRecipes();
 
             Console.WriteLine("=== All Recipes ===");
             foreach (var r in recipes) Console.WriteLine(r);
             Console.WriteLine();
 
-            // Build a player inventory that can craft every recipe once
+            // Populate inventory using the same Item instances
             var inventory = new Inventory();
-            inventory.Add("milk",          10m);
-            inventory.Add("chocolate_chip",2m);
-            inventory.Add("flour",         5m);
-            inventory.Add("water",         5m);
-            inventory.Add("yeast",         0.1m);
-            inventory.Add("herb",          5m);
-            inventory.Add("sugar",         1m);   // enough for Sweet Hot Chocolate
+            inventory.Add(GameItems.Milk.Id.ToString(),          10m);
+            inventory.Add(GameItems.ChocolateChip.Id.ToString(),  2m);
+            inventory.Add(GameItems.Flour.Id.ToString(),         5m);
+            inventory.Add(GameItems.Water.Id.ToString(),         5m);
+            inventory.Add(GameItems.Yeast.Id.ToString(),         0.1m);
+            inventory.Add(GameItems.Herb.Id.ToString(),          5m);
+            inventory.Add(GameItems.Sugar.Id.ToString(),         1m); // needed for Sweet Hot Chocolate
 
-            // Try to craft each recipe
+            // Attempt to craft each recipe
             foreach (var recipe in recipes)
             {
                 Console.WriteLine($"Attempting to craft: {recipe.Name}");
@@ -360,7 +328,7 @@ namespace CraftingEngine
                 {
                     var res = recipe.Result;
                     Console.WriteLine(
-                        $"  SUCCESS – you now have {inventory.GetAmount(res.Item.Id)} {res.Item.Unit} {res.Item.Name}");
+                        $"  SUCCESS – you now have {inventory.GetAmount(res.Item.Id.ToString())} {res.Item.Unit} {res.Item.Name}");
                 }
                 else
                 {
@@ -369,7 +337,7 @@ namespace CraftingEngine
                 Console.WriteLine();
             }
 
-            // Final inventory snapshot (show only items with a positive amount)
+            // Final inventory snapshot (only items with a positive amount)
             Console.WriteLine("=== Final Inventory ===");
             foreach (var kvp in inventory.Contents.Where(k => k.Value > 0))
                 Console.WriteLine($"{kvp.Key}: {kvp.Value}");
