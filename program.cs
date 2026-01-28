@@ -1,5 +1,3 @@
-Here’s the complete program.cs file, renamed to follow the conventional C# entry‑point pattern (a Program class with a Main method). All of the original functionality remains unchanged, and the header comment you requested is retained at the very top of the file.
-
 /*
  *Craft System*
  Your Name
